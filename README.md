@@ -28,7 +28,7 @@ Detecting Web Scraping with Splunk AIML/
 
 ### Option 1: Automated Deployment (Recommended)
 ```powershell
-# Run the deployment script (adjust Splunk path if needed)
+# Run the deployment script 
 .\deploy_to_splunk.ps1
 
 # For custom Splunk installation pat:
@@ -50,24 +50,14 @@ Follow the detailed setup instructions below.
 #### A. Create Splunk App Directory Structure
 ```bash
 # Option 1: If you have SPLUNK_HOME set
-export SPLUNK_HOME="/opt/splunk"  # Adjust path as needed
+export SPLUNK_HOME="/opt/splunk"
 mkdir -p $SPLUNK_HOME/etc/apps/web_scraping_detection/{local,lookups,metadata}
 
-# Option 2: Manual directory creation (Windows)
-# Navigate to your Splunk installation (typically C:\Program Files\Splunk)
-# Create: etc\apps\web_scraping_detection\local\
-# Create: etc\apps\web_scraping_detection\lookups\
-# Create: etc\apps\web_scraping_detection\metadata\
-```
 
 #### B. Copy Configuration Files
 ```bash
-# For Linux/Mac with SPLUNK_HOME set:
-cp splunk_config/props.conf $SPLUNK_HOME/etc/apps/web_scraping_detection/local/
-cp splunk_config/transforms.conf $SPLUNK_HOME/etc/apps/web_scraping_detection/local/
-cp lookups/*.csv $SPLUNK_HOME/etc/apps/web_scraping_detection/lookups/
 
-# For Windows (adjust Splunk path as needed):
+# For Windows 
 copy splunk_config\props.conf "C:\Program Files\Splunk\etc\apps\web_scraping_detection\local\"
 copy splunk_config\transforms.conf "C:\Program Files\Splunk\etc\apps\web_scraping_detection\local\"
 copy lookups\*.csv "C:\Program Files\Splunk\etc\apps\web_scraping_detection\lookups\"
@@ -87,12 +77,7 @@ export = system
 ```bash
 # Create index via CLI
 $SPLUNK_HOME/bin/splunk add index infrastructure_analysis
-
-# Or via Splunk Web: Settings > Indexes > New Index
-# Index Name: infrastructure_analysis
-# Max Size: 500GB (adjust as needed)
 ```
-
 ### 3. Data Ingestion
 
 #### Upload client_hostname.csv to Splunk:
