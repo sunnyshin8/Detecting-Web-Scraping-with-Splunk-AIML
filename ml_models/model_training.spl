@@ -1,0 +1,246 @@
+# MLTK Model Training for Web Scraping Infrastructure Detection using client_hostname.csv
+# These SPL commands analyze hostname resolution patterns to identify bot infrastructure
+
+# ============================================
+# MODEL 1: INFRASTRUCTURE BASELINE MODEL
+# ============================================
+
+# Step 1: Create baseline model for normal infrastructure patterns
+index=network sourcetype=client_hostname_data earliest=-30d latest=-7d
+| eval has_dns_numeric = if(has_reverse_dns=="true", 1, 0)
+| eval hosting_score = case(
+    hosting_provider=="AWS", 3,
+    hosting_provider=="DigitalOcean", 4,
+    hosting_provider=="Vultr", 4,
+    hosting_provider=="Linode", 3,
+    hosting_provider=="OVH", 2,
+    hosting_provider!="Unknown", 1,
+    1==1, 0
+)
+| eval suspicious_score = case(
+    suspicious_pattern=="Bot_Infrastructure", 10,
+    suspicious_pattern=="Anonymization", 8,
+    suspicious_pattern=="Malicious", 10,
+    suspicious_pattern=="Private_IP", 2,
+    suspicious_pattern!="None", 3,
+    1==1, 0
+)
+| where bot_infrastructure_score <= 8  # Focus on "normal" infrastructure
+| fit DensityFunction has_dns_numeric hosting_score suspicious_score bot_infrastructure_score
+    into infrastructure_baseline_model
+
+# Step 2: Apply the model to detect infrastructure outliers
+index=network sourcetype=client_hostname_data earliest=-7d
+| eval has_dns_numeric = if(has_reverse_dns=="true", 1, 0)
+| eval hosting_score = case(
+    hosting_provider=="AWS", 3,
+    hosting_provider=="DigitalOcean", 4,
+    hosting_provider=="Vultr", 4,
+    hosting_provider=="Linode", 3,
+    hosting_provider=="OVH", 2,
+    hosting_provider!="Unknown", 1,
+    1==1, 0
+)
+| eval suspicious_score = case(
+    suspicious_pattern=="Bot_Infrastructure", 10,
+    suspicious_pattern=="Anonymization", 8,
+    suspicious_pattern=="Malicious", 10,
+    suspicious_pattern=="Private_IP", 2,
+    suspicious_pattern!="None", 3,
+    1==1, 0
+)
+| apply infrastructure_baseline_model
+| where isOutlier > 0
+| eval anomaly_score = round((1 - probability) * 100, 2)
+| sort - anomaly_score
+
+# ============================================
+# MODEL 2: HOSTING PROVIDER CLUSTERING
+# ============================================
+
+# Step 1: Cluster IPs based on hosting and infrastructure characteristics
+index=network sourcetype=client_hostname_data earliest=-14d
+| eval aws_score = if(hosting_provider=="AWS", 1, 0)
+| eval digitalocean_score = if(hosting_provider=="DigitalOcean", 1, 0)
+| eval vultr_score = if(hosting_provider=="Vultr", 1, 0)
+| eval linode_score = if(hosting_provider=="Linode", 1, 0)
+| eval ovh_score = if(hosting_provider=="OVH", 1, 0)
+| eval has_hosting = if(hosting_provider!="Unknown", 1, 0)
+| eval has_dns = if(has_reverse_dns=="true", 1, 0)
+| eval is_suspicious = if(suspicious_pattern!="None", 1, 0)
+| fit KMeans k=6 aws_score digitalocean_score vultr_score linode_score ovh_score has_hosting has_dns is_suspicious bot_infrastructure_score
+    into hosting_pattern_clusters
+
+# Step 2: Apply hosting clustering to identify bot infrastructure patterns
+index=network sourcetype=client_hostname_data earliest=-7d
+| eval aws_score = if(hosting_provider=="AWS", 1, 0)
+| eval digitalocean_score = if(hosting_provider=="DigitalOcean", 1, 0)
+| eval vultr_score = if(hosting_provider=="Vultr", 1, 0)
+| eval linode_score = if(hosting_provider=="Linode", 1, 0)
+| eval ovh_score = if(hosting_provider=="OVH", 1, 0)
+| eval has_hosting = if(hosting_provider!="Unknown", 1, 0)
+| eval has_dns = if(has_reverse_dns=="true", 1, 0)
+| eval is_suspicious = if(suspicious_pattern!="None", 1, 0)
+| apply hosting_pattern_clusters
+| eval cluster_interpretation = case(
+    cluster == "cluster_0", "High-Risk Bot Infrastructure",
+    cluster == "cluster_1", "Cloud Hosting Concentration", 
+    cluster == "cluster_2", "Suspicious Patterns",
+    cluster == "cluster_3", "Mixed Infrastructure",
+    cluster == "cluster_4", "Residential/Clean",
+    cluster == "cluster_5", "Unknown Infrastructure",
+    1==1, "Unclassified"
+)
+| where match(cluster_interpretation, "High-Risk|Suspicious")
+| sort - bot_infrastructure_score
+
+# ============================================
+# MODEL 3: GEOGRAPHIC INFRASTRUCTURE ANALYSIS
+# ============================================
+
+# Step 1: Analyze infrastructure distribution by geography
+index=network sourcetype=client_hostname_data earliest=-14d
+| stats count as total_ips,
+        count(eval(hosting_provider!="Unknown")) as hosting_ips,
+        count(eval(suspicious_pattern!="None")) as suspicious_ips,
+        avg(bot_infrastructure_score) as avg_bot_score,
+        count(eval(has_reverse_dns=="false")) as no_dns_ips
+  by country_indicator
+| eval hosting_rate = hosting_ips / total_ips
+| eval suspicious_rate = suspicious_ips / total_ips  
+| eval no_dns_rate = no_dns_ips / total_ips
+| where total_ips >= 10  # Focus on countries with meaningful data
+| fit KMeans k=4 hosting_rate suspicious_rate no_dns_rate avg_bot_score
+    into geographic_infrastructure_model
+
+# Step 2: Apply geographic model to identify anomalous countries
+index=network sourcetype=client_hostname_data earliest=-7d
+| stats count as total_ips,
+        count(eval(hosting_provider!="Unknown")) as hosting_ips,
+        count(eval(suspicious_pattern!="None")) as suspicious_ips,
+        avg(bot_infrastructure_score) as avg_bot_score,
+        count(eval(has_reverse_dns=="false")) as no_dns_ips
+  by country_indicator
+| eval hosting_rate = hosting_ips / total_ips
+| eval suspicious_rate = suspicious_ips / total_ips
+| eval no_dns_rate = no_dns_ips / total_ips
+| where total_ips >= 10
+| apply geographic_infrastructure_model
+| eval risk_profile = case(
+    cluster == "cluster_0", "High Bot Infrastructure Concentration",
+    cluster == "cluster_1", "Moderate Infrastructure Risk",
+    cluster == "cluster_2", "Low Infrastructure Risk", 
+    cluster == "cluster_3", "Mixed Infrastructure Profile",
+    1==1, "Unknown Profile"
+)
+| where match(risk_profile, "High|Moderate")
+
+# ============================================
+# MODEL 4: HOSTNAME PATTERN ANALYSIS
+# ============================================
+
+# Step 1: Analyze hostname patterns for bot detection
+index=network sourcetype=client_hostname_data earliest=-14d
+| where hostname != client_ip AND has_reverse_dns=="true"
+| eval hostname_length = len(hostname)
+| eval has_digits = if(match(hostname, "\d"), 1, 0)
+| eval has_hyphens = if(match(hostname, "-"), 1, 0)
+| eval domain_parts = mvcount(split(hostname, "."))
+| eval tld = substr(hostname, len(hostname)-2, 3)
+| eval is_dynamic_pattern = if(match(hostname, "(?i)dynamic|dhcp|adsl|dsl|cable|mobile"), 1, 0)
+| eval is_server_pattern = if(match(hostname, "(?i)server|host|vps|cloud|compute"), 1, 0)
+| eval is_bot_pattern = if(match(hostname, "(?i)bot|crawl|spider|automation"), 1, 0)
+| fit KMeans k=5 hostname_length has_digits has_hyphens domain_parts is_dynamic_pattern is_server_pattern is_bot_pattern
+    into hostname_pattern_clusters
+
+# Step 2: Apply hostname pattern analysis
+index=network sourcetype=client_hostname_data earliest=-7d
+| where hostname != client_ip AND has_reverse_dns=="true"
+| eval hostname_length = len(hostname)
+| eval has_digits = if(match(hostname, "\d"), 1, 0)
+| eval has_hyphens = if(match(hostname, "-"), 1, 0)
+| eval domain_parts = mvcount(split(hostname, "."))
+| eval is_dynamic_pattern = if(match(hostname, "(?i)dynamic|dhcp|adsl|dsl|cable|mobile"), 1, 0)
+| eval is_server_pattern = if(match(hostname, "(?i)server|host|vps|cloud|compute"), 1, 0)
+| eval is_bot_pattern = if(match(hostname, "(?i)bot|crawl|spider|automation"), 1, 0)
+| apply hostname_pattern_clusters
+| eval hostname_risk = case(
+    cluster == "cluster_0", "Server Infrastructure Pattern",
+    cluster == "cluster_1", "Bot/Automation Pattern",
+    cluster == "cluster_2", "Dynamic/Residential Pattern",
+    cluster == "cluster_3", "Mixed Pattern",
+    cluster == "cluster_4", "Standard Pattern",
+    1==1, "Unknown Pattern"
+)
+| where match(hostname_risk, "Server|Bot")
+
+# ============================================
+# MODEL 5: ENSEMBLE INFRASTRUCTURE SCORING
+# ============================================
+
+# Combine all models into a comprehensive infrastructure risk score
+index=network sourcetype=client_hostname_data earliest=-24h
+| eval has_dns_numeric = if(has_reverse_dns=="true", 1, 0)
+| eval hosting_score = case(
+    hosting_provider=="AWS", 3,
+    hosting_provider=="DigitalOcean", 4,
+    hosting_provider=="Vultr", 4,
+    hosting_provider=="Linode", 3,
+    hosting_provider=="OVH", 2,
+    hosting_provider!="Unknown", 1,
+    1==1, 0
+)
+| eval suspicious_score = case(
+    suspicious_pattern=="Bot_Infrastructure", 10,
+    suspicious_pattern=="Anonymization", 8,
+    suspicious_pattern=="Malicious", 10,
+    suspicious_pattern=="Private_IP", 2,
+    suspicious_pattern!="None", 3,
+    1==1, 0
+)
+
+# Apply all trained models
+| apply infrastructure_baseline_model AS baseline
+| apply hosting_pattern_clusters AS hosting
+| apply geographic_infrastructure_model AS geographic
+
+# Calculate ensemble scores
+| eval baseline_score = if(baseline_isOutlier > 0, 10 - (baseline_probability * 10), 0)
+| eval hosting_score_adj = case(
+    hosting_cluster == "cluster_0", 10,  # High-Risk Bot Infrastructure
+    hosting_cluster == "cluster_1", 7,   # Cloud Hosting Concentration
+    hosting_cluster == "cluster_2", 8,   # Suspicious Patterns
+    hosting_cluster == "cluster_3", 4,   # Mixed Infrastructure
+    1==1, 0
+)
+| eval geographic_score = case(
+    geographic_cluster == "cluster_0", 8,  # High Bot Infrastructure Concentration
+    geographic_cluster == "cluster_1", 5,  # Moderate Infrastructure Risk
+    1==1, 0
+)
+
+# Infrastructure-specific scoring
+| eval infrastructure_risk_score = case(
+    suspicious_score >= 8, 10,
+    hosting_provider=="DigitalOcean" AND bot_infrastructure_score >= 6, 8,
+    hosting_provider=="AWS" AND bot_infrastructure_score >= 8, 7,
+    hosting_provider!="Unknown" AND bot_infrastructure_score >= 7, 6,
+    bot_infrastructure_score >= 8, 7,
+    has_reverse_dns=="false" AND bot_infrastructure_score >= 5, 5,
+    1==1, 0
+)
+
+# Final ensemble score (weighted average)
+| eval final_infrastructure_score = round(
+    (baseline_score * 0.25 + hosting_score_adj * 0.3 + geographic_score * 0.2 + infrastructure_risk_score * 0.25), 2
+)
+| eval threat_level = case(
+    final_infrastructure_score >= 9, "CRITICAL",
+    final_infrastructure_score >= 7, "HIGH",
+    final_infrastructure_score >= 5, "MEDIUM", 
+    final_infrastructure_score >= 3, "LOW",
+    1==1, "MINIMAL"
+)
+| where final_infrastructure_score >= 3
+| sort - final_infrastructure_score
+| table client_ip, hostname, hosting_provider, suspicious_pattern, country_indicator, final_infrastructure_score, threat_level, baseline_score, hosting_score_adj, geographic_score, infrastructure_risk_score

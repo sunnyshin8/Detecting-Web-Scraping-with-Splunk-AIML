@@ -1,0 +1,186 @@
+# Web Scraping Infrastructure Detection Dashboard Queries for client_hostname.csv
+
+# ============================================
+# PANEL 1: INFRASTRUCTURE OVERVIEW METRICS
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| stats count as total_ips,
+        count(eval(has_reverse_dns=="true")) as resolved_ips,
+        count(eval(hosting_provider!="Unknown")) as hosting_ips,
+        count(eval(suspicious_pattern!="None")) as suspicious_ips,
+        count(eval(bot_infrastructure_score>=8)) as high_risk_ips,
+        dc(hosting_provider) as hosting_providers,
+        dc(country_indicator) as countries
+| eval resolution_rate = round((resolved_ips/total_ips)*100, 1)
+| eval hosting_rate = round((hosting_ips/total_ips)*100, 1)
+| eval suspicious_rate = round((suspicious_ips/total_ips)*100, 1)
+| eval high_risk_rate = round((high_risk_ips/total_ips)*100, 1)
+| table total_ips, resolution_rate, hosting_rate, suspicious_rate, high_risk_rate, hosting_providers, countries
+</query>
+
+# ============================================
+# PANEL 2: TOP HOSTING PROVIDERS (BAR CHART)
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| where hosting_provider != "Unknown"
+| stats count as ip_count by hosting_provider
+| eval scraping_risk = case(
+    hosting_provider=="AWS", "HIGH",
+    hosting_provider=="DigitalOcean", "HIGH", 
+    hosting_provider=="Vultr", "MEDIUM",
+    hosting_provider=="Linode", "MEDIUM",
+    hosting_provider=="OVH", "MEDIUM",
+    1==1, "LOW"
+)
+| sort - ip_count
+| table hosting_provider, ip_count, scraping_risk
+</query>
+
+# ============================================
+# PANEL 3: SUSPICIOUS PATTERN DISTRIBUTION (PIE CHART)
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| stats count by suspicious_pattern
+| eval category = case(
+    suspicious_pattern=="None", "Clean Infrastructure",
+    suspicious_pattern=="Bot_Infrastructure", "Bot Infrastructure",
+    suspicious_pattern=="Anonymization", "Anonymization Services",
+    suspicious_pattern=="Malicious", "Malicious Infrastructure", 
+    suspicious_pattern=="Private_IP", "Private IP Ranges",
+    1==1, "Other"
+)
+| stats sum(count) as total by category
+| eval percentage = round((total / sum(total)) * 100, 1)
+| sort - total
+</query>
+
+# ============================================
+# PANEL 4: GEOGRAPHIC HEATMAP OF SUSPICIOUS IPS
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| where bot_infrastructure_score >= 6
+| iplocation client_ip
+| stats count as suspicious_ips by Country, lat, lon
+| where isnotnull(lat) AND isnotnull(lon)
+| geostats latfield=lat longfield=lon count by Country
+</query>
+
+# ============================================
+# PANEL 5: ISP TYPE ANALYSIS (STACKED BAR)
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| stats count as ip_count by isp_pattern, country_indicator
+| chart values(ip_count) over country_indicator by isp_pattern
+| fillnull value=0
+</query>
+
+# ============================================
+# PANEL 6: HIGH-RISK IP TABLE
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| where bot_infrastructure_score >= 8
+| eval risk_factors = case(
+    hosting_provider!="Unknown" AND suspicious_pattern!="None", hosting_provider + " + " + suspicious_pattern,
+    hosting_provider!="Unknown", hosting_provider + " hosting",
+    suspicious_pattern!="None", suspicious_pattern,
+    has_reverse_dns=="false", "No reverse DNS",
+    1==1, "Multiple factors"
+)
+| table client_ip, hostname, hosting_provider, suspicious_pattern, bot_infrastructure_score, country_indicator, risk_factors
+| sort - bot_infrastructure_score
+| head 50
+</query>
+
+# ============================================
+# PANEL 7: DNS RESOLUTION ANALYSIS (GAUGE)
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| stats count as total,
+        count(eval(has_reverse_dns=="true")) as resolved,
+        count(eval(hostname_error=="true")) as errors
+| eval resolution_rate = round((resolved / total) * 100, 1)
+| eval error_rate = round((errors / total) * 100, 1)
+| eval health_score = case(
+    resolution_rate > 80, "GOOD",
+    resolution_rate > 60, "MODERATE", 
+    resolution_rate > 40, "POOR",
+    1==1, "CRITICAL"
+)
+| table resolution_rate, error_rate, health_score
+</query>
+
+# ============================================
+# PANEL 8: HOSTING CONCENTRATION BY COUNTRY
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| where hosting_provider != "Unknown"
+| stats count as hosting_ips by country_indicator, hosting_provider
+| eventstats sum(hosting_ips) as total_hosting by country_indicator
+| eval concentration = round((hosting_ips / total_hosting) * 100, 1)
+| where concentration > 20
+| table country_indicator, hosting_provider, hosting_ips, concentration
+| sort country_indicator, - concentration
+</query>
+
+# ============================================
+# PANEL 9: ANOMALY DETECTION RESULTS
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data
+| eval has_dns_numeric = if(has_reverse_dns=="true", 1, 0)
+| eval hosting_score = case(
+    hosting_provider=="AWS", 5,
+    hosting_provider=="DigitalOcean", 4,
+    hosting_provider=="Vultr", 3,
+    hosting_provider!="Unknown", 2,
+    1==1, 0
+)
+| eval suspicious_score = case(
+    suspicious_pattern=="Bot_Infrastructure", 5,
+    suspicious_pattern=="Anonymization", 4,
+    suspicious_pattern=="Malicious", 5,
+    suspicious_pattern!="None", 2,
+    1==1, 0
+)
+| stats avg(has_dns_numeric) as avg_dns,
+        avg(hosting_score) as avg_hosting,
+        avg(suspicious_score) as avg_suspicious,
+        count as ip_count
+  by country_indicator
+| fit DensityFunction avg_dns avg_hosting avg_suspicious into temp_model
+| apply temp_model
+| where isOutlier > 0
+| eval anomaly_score = round((1-probability)*100, 1)
+| sort - anomaly_score
+| table country_indicator, ip_count, avg_hosting, avg_suspicious, avg_dns, anomaly_score
+</query>
+
+# ============================================
+# PANEL 10: REAL-TIME THREAT MONITORING
+# ============================================
+<query>
+index=network sourcetype=client_hostname_data earliest=-1h
+| where suspicious_pattern != "None" OR bot_infrastructure_score >= 8
+| stats count as new_threats,
+        values(hosting_provider) as threat_providers,
+        values(suspicious_pattern) as threat_patterns,
+        dc(country_indicator) as threat_countries,
+        max(bot_infrastructure_score) as max_risk_score
+| eval threat_level = case(
+    new_threats > 1000, "CRITICAL",
+    new_threats > 500, "HIGH", 
+    new_threats > 100, "MEDIUM",
+    new_threats > 20, "LOW",
+    1==1, "MINIMAL"
+)
+| eval alert_summary = "Detected " + tostring(new_threats) + " suspicious IPs from " + tostring(threat_countries) + " countries"
+| table new_threats, threat_countries, max_risk_score, threat_level, alert_summary, threat_providers, threat_patterns
+</query>

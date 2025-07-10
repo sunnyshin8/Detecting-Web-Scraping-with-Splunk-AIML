@@ -1,0 +1,38 @@
+# default.meta - Metadata configuration for Web Scraping Detection app
+# This file defines permissions and export settings for knowledge objects
+
+[views]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567
+
+[lookups]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567
+
+[savedsearches]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567
+
+[transforms]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567
+
+[props]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567
+
+[macros]
+export = system
+owner = admin
+version = 1.0.0
+modtime = 1641234567

@@ -1,0 +1,213 @@
+# SPL Queries for Web Scraping Infrastructure Detection using client_hostname.csv
+# These queries analyze hostname resolution patterns to identify scraping infrastructure
+
+# ============================================
+# 1. HOSTING PROVIDER ANALYSIS
+# ============================================
+
+# Identify IPs from major hosting providers commonly used for scraping
+index=network sourcetype=client_hostname_data
+| stats count as total_ips by hosting_provider
+| eval scraping_risk = case(
+    hosting_provider=="AWS", "HIGH - Commonly used for automated scraping",
+    hosting_provider=="DigitalOcean", "HIGH - Popular for bot infrastructure", 
+    hosting_provider=="Vultr", "MEDIUM - Budget hosting often used for bots",
+    hosting_provider=="Linode", "MEDIUM - VPS hosting",
+    hosting_provider=="OVH", "MEDIUM - European hosting provider",
+    hosting_provider=="Unknown", "LOW - Residential or unknown",
+    1==1, "REVIEW"
+)
+| sort - total_ips
+| table hosting_provider, total_ips, scraping_risk
+
+# ============================================
+# 2. REVERSE DNS ANALYSIS
+# ============================================
+
+# Analyze patterns in IPs without proper reverse DNS (suspicious for bots)
+index=network sourcetype=client_hostname_data
+| stats count as total_count,
+        count(eval(has_reverse_dns=="true")) as has_dns_count,
+        count(eval(has_reverse_dns=="false")) as no_dns_count,
+        count(eval(hostname_error=="true")) as error_count
+| eval dns_resolution_rate = round((has_dns_count / total_count) * 100, 2)
+| eval error_rate = round((error_count / total_count) * 100, 2)
+| eval suspicious_rate = round((no_dns_count / total_count) * 100, 2)
+| table total_count, dns_resolution_rate, error_rate, suspicious_rate
+
+# ============================================
+# 3. SUSPICIOUS HOSTNAME PATTERNS
+# ============================================
+
+# Find hostnames indicating bot/scraping infrastructure
+index=network sourcetype=client_hostname_data
+| where suspicious_pattern != "None"
+| stats count as instances, 
+        values(client_ip) as example_ips
+  by suspicious_pattern
+| eval risk_level = case(
+    suspicious_pattern=="Bot_Infrastructure", "CRITICAL",
+    suspicious_pattern=="Anonymization", "HIGH",
+    suspicious_pattern=="Malicious", "CRITICAL", 
+    suspicious_pattern=="Private_IP", "MEDIUM",
+    1==1, "LOW"
+)
+| sort - instances
+| table suspicious_pattern, instances, risk_level, example_ips
+
+# ============================================
+# 4. ISP PATTERN ANALYSIS
+# ============================================
+
+# Analyze distribution of ISP types to identify automation patterns
+index=network sourcetype=client_hostname_data
+| stats count as ip_count by isp_pattern, country_indicator
+| eventstats sum(ip_count) as total_ips
+| eval percentage = round((ip_count / total_ips) * 100, 2)
+| eval automation_risk = case(
+    isp_pattern=="Hosting" AND percentage > 10, "HIGH - Large hosting presence",
+    isp_pattern=="Hosting", "MEDIUM - Some hosting infrastructure",
+    isp_pattern=="Residential" AND percentage < 50, "MEDIUM - Low residential ratio",
+    isp_pattern=="Business" AND percentage > 30, "MEDIUM - High business usage",
+    1==1, "LOW"
+)
+| sort - ip_count
+| table isp_pattern, country_indicator, ip_count, percentage, automation_risk
+
+# ============================================
+# 5. GEOGRAPHIC INFRASTRUCTURE CLUSTERING
+# ============================================
+
+# Identify geographic clusters of hosting infrastructure
+index=network sourcetype=client_hostname_data
+| where hosting_provider != "Unknown"
+| stats count as hosting_ips by country_indicator, hosting_provider
+| eventstats sum(hosting_ips) as total_hosting by country_indicator
+| eval hosting_concentration = round((hosting_ips / total_hosting) * 100, 2)
+| where hosting_concentration > 20
+| sort country_indicator, - hosting_concentration
+| table country_indicator, hosting_provider, hosting_ips, hosting_concentration
+
+# ============================================
+# 6. BOT INFRASTRUCTURE SCORING
+# ============================================
+
+# Score IPs based on infrastructure characteristics for bot likelihood
+index=network sourcetype=client_hostname_data
+| eval infrastructure_score = bot_infrastructure_score + case(
+    isp_pattern=="Hosting", 5,
+    isp_pattern=="Business", 2,
+    suspicious_pattern!="None", 6,
+    country_indicator=="Unknown", 1,
+    1==1, 0
+)
+| eval bot_likelihood = case(
+    infrastructure_score >= 15, "VERY HIGH",
+    infrastructure_score >= 10, "HIGH", 
+    infrastructure_score >= 6, "MEDIUM",
+    infrastructure_score >= 3, "LOW",
+    1==1, "MINIMAL"
+)
+| where infrastructure_score >= 6
+| stats count as ip_count by bot_likelihood, hosting_provider, isp_pattern
+| sort - ip_count
+
+# ============================================
+# 7. ANOMALY DETECTION USING MLTK
+# ============================================
+
+# Prepare data for MLTK anomaly detection on infrastructure patterns
+index=network sourcetype=client_hostname_data
+| eval has_dns_numeric = if(has_reverse_dns=="true", 1, 0)
+| eval hosting_numeric = case(
+    hosting_provider=="AWS", 5,
+    hosting_provider=="DigitalOcean", 4,
+    hosting_provider=="Vultr", 3,
+    hosting_provider=="Linode", 3,
+    hosting_provider=="OVH", 2,
+    1==1, 0
+)
+| eval suspicious_numeric = case(
+    suspicious_pattern=="Bot_Infrastructure", 5,
+    suspicious_pattern=="Anonymization", 4,
+    suspicious_pattern=="Malicious", 5,
+    suspicious_pattern=="Private_IP", 2,
+    1==1, 0
+)
+| stats avg(has_dns_numeric) as avg_dns_resolution,
+        avg(hosting_numeric) as avg_hosting_score,
+        avg(suspicious_numeric) as avg_suspicious_score,
+        avg(bot_infrastructure_score) as avg_bot_score,
+        count as ip_count
+  by country_indicator
+
+# Apply MLTK anomaly detection
+| fit DensityFunction avg_dns_resolution avg_hosting_score avg_suspicious_score avg_bot_score into country_infrastructure_model
+| apply country_infrastructure_model  
+| where isOutlier > 0
+| eval anomaly_reason = case(
+    avg_hosting_score > 2, "High hosting provider concentration",
+    avg_suspicious_score > 1, "High suspicious pattern rate",
+    avg_dns_resolution < 0.5, "Low DNS resolution rate",
+    avg_bot_score > 5, "High bot infrastructure indicators",
+    1==1, "Mixed anomaly factors"
+)
+| table country_indicator, ip_count, avg_hosting_score, avg_suspicious_score, avg_dns_resolution, probability, anomaly_reason
+
+# ============================================
+# 8. HOSTING PROVIDER CONCENTRATION ANALYSIS
+# ============================================
+
+# Identify unusual concentrations of specific hosting providers
+index=network sourcetype=client_hostname_data
+| where hosting_provider != "Unknown"
+| stats count as provider_ips by hosting_provider
+| eventstats sum(provider_ips) as total_hosting_ips
+| eval market_share = round((provider_ips / total_hosting_ips) * 100, 2)
+| eval automation_concern = case(
+    hosting_provider=="AWS" AND market_share > 40, "HIGH - Dominant AWS presence suggests automation",
+    hosting_provider=="DigitalOcean" AND market_share > 30, "HIGH - High DO concentration typical of bot farms",
+    market_share > 25, "MEDIUM - High concentration for " + hosting_provider,
+    1==1, "LOW"
+)
+| sort - market_share
+| table hosting_provider, provider_ips, market_share, automation_concern
+
+# ============================================
+# 9. REAL-TIME INFRASTRUCTURE MONITORING
+# ============================================
+
+# Monitor for new suspicious infrastructure patterns (for alerting)
+index=network sourcetype=client_hostname_data earliest=-1h
+| where suspicious_pattern != "None" OR bot_infrastructure_score >= 8
+| stats count as new_suspicious_ips,
+        values(hosting_provider) as providers,
+        values(suspicious_pattern) as patterns,
+        dc(country_indicator) as countries
+| eval alert_level = case(
+    new_suspicious_ips > 100, "CRITICAL", 
+    new_suspicious_ips > 50, "HIGH",
+    new_suspicious_ips > 20, "MEDIUM",
+    1==1, "LOW"
+)
+| eval alert_message = "Detected " + tostring(new_suspicious_ips) + " new suspicious infrastructure IPs from " + tostring(countries) + " countries"
+| table new_suspicious_ips, countries, providers, patterns, alert_level, alert_message
+
+# ============================================
+# 10. SUMMARY DASHBOARD STATISTICS
+# ============================================
+
+# Overall infrastructure analysis summary
+index=network sourcetype=client_hostname_data
+| stats count as total_ips,
+        count(eval(has_reverse_dns=="true")) as resolved_ips,
+        count(eval(hosting_provider!="Unknown")) as hosting_ips,
+        count(eval(suspicious_pattern!="None")) as suspicious_ips,
+        count(eval(bot_infrastructure_score>=6)) as likely_bot_ips,
+        dc(hosting_provider) as unique_providers,
+        dc(country_indicator) as unique_countries
+| eval resolution_rate = round((resolved_ips / total_ips) * 100, 2)
+| eval hosting_rate = round((hosting_ips / total_ips) * 100, 2)
+| eval suspicious_rate = round((suspicious_ips / total_ips) * 100, 2)
+| eval bot_rate = round((likely_bot_ips / total_ips) * 100, 2)
+| table total_ips, resolution_rate, hosting_rate, suspicious_rate, bot_rate, unique_providers, unique_countries

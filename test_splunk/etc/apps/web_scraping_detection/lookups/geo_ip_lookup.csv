@@ -1,0 +1,16 @@
+ip_range,city,country,region,lat,lon,isp,organization
+8.8.8.0/24,Mountain View,United States,California,37.4056,-122.0775,Google,Google LLC
+1.1.1.0/24,San Francisco,United States,California,37.7749,-122.4194,Cloudflare,Cloudflare Inc
+208.67.222.0/24,San Francisco,United States,California,37.7749,-122.4194,OpenDNS,Cisco OpenDNS
+4.2.2.0/24,Reston,United States,Virginia,38.9339,-77.3419,Level3,CenturyLink
+192.168.0.0/16,Private,Private,Private,0,0,Private,Private Network
+10.0.0.0/8,Private,Private,Private,0,0,Private,Private Network
+172.16.0.0/12,Private,Private,Private,0,0,Private,Private Network
+127.0.0.0/8,Localhost,Localhost,Localhost,0,0,Localhost,Localhost
+64.233.160.0/19,Mountain View,United States,California,37.4056,-122.0775,Google,Google Inc
+173.252.64.0/18,Menlo Park,United States,California,37.4533,-122.1378,Facebook,Facebook Inc
+69.63.176.0/20,Ashburn,United States,Virginia,39.0481,-77.4728,Facebook,Facebook Inc
+199.16.156.0/22,San Francisco,United States,California,37.7749,-122.4194,Twitter,Twitter Inc
+140.82.112.0/20,San Francisco,United States,California,37.7749,-122.4194,GitHub,GitHub Inc
+151.101.0.0/16,San Francisco,United States,California,37.7749,-122.4194,Fastly,Fastly Inc
+23.235.32.0/20,Cambridge,United States,Massachusetts,42.3751,-71.1056,Akamai,Akamai Technologies
