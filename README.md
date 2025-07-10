@@ -21,7 +21,7 @@ Detecting Web Scraping with Splunk AIML/
 │   └── savedsearches.conf           # Automated alert configurations
 ├── ml_models/
 │   └── model_training.spl           # MLTK model training scripts
-└── client_hostname.csv              # Main dataset for analysis
+└── access.log             # Main dataset for analysis
 ```
 
 ## Quick Deployment
